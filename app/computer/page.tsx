@@ -156,11 +156,7 @@ export default function ComputerPage() {
               mime: message.mime
             });
             setStatus("receiving");
-            const showSaveFilePicker = (
-              window as typeof window & {
-                showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
-              }
-            ).showSaveFilePicker;
+            const showSaveFilePicker = window.showSaveFilePicker;
             if (!writableRef.current && showSaveFilePicker) {
               try {
                 const extension = message.name.includes(".")
