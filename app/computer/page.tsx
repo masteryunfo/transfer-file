@@ -68,6 +68,7 @@ export default function ComputerPage() {
   const countdownRef = useRef<number | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const writableRef = useRef<FileSystemWritableFileStream | null>(null);
+  const startedRef = useRef(false);
 
   const progress = useMemo(() => {
     if (!fileMeta || fileMeta.size === 0) return 0;
@@ -304,14 +305,17 @@ export default function ComputerPage() {
   }, [handleDataMessage, startCountdown]);
 
   useEffect(() => {
-    if (status === "idle") {
-      void connect();
+    if (startedRef.current) {
+      return;
     }
+    startedRef.current = true;
+    void connect();
 
     return () => {
       cleanup();
+      startedRef.current = false;
     };
-  }, [cleanup, connect, status]);
+  }, [cleanup, connect]);
 
   const countdownLabel = useMemo(() => {
     const minutes = Math.floor(secondsLeft / 60);
