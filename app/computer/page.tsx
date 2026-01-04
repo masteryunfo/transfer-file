@@ -233,15 +233,20 @@ export default function ComputerPage() {
 
       const pc = createPeerConnection();
       pcRef.current = pc;
-      pc.createDataChannel("bootstrap");
+      const channel = pc.createDataChannel("file");
+      channel.binaryType = "arraybuffer";
+      channel.onmessage = (message) => {
+        void handleDataMessage(message);
+      };
+      channelRef.current = channel;
 
       pc.ondatachannel = (event) => {
-        const channel = event.channel;
-        channel.binaryType = "arraybuffer";
-        channel.onmessage = (message) => {
+        const incoming = event.channel;
+        incoming.binaryType = "arraybuffer";
+        incoming.onmessage = (message) => {
           void handleDataMessage(message);
         };
-        channelRef.current = channel;
+        channelRef.current = incoming;
       };
 
       const offer = await pc.createOffer();

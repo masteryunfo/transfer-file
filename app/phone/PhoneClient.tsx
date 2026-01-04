@@ -61,6 +61,7 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<RTCDataChannel | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const startedRef = useRef(false);
 
   const progress = useMemo(() => {
     if (!selectedFile || selectedFile.size === 0) return 0;
@@ -97,6 +98,15 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
     try {
       const pc = createPeerConnection();
       pcRef.current = pc;
+      pc.ondatachannel = (event) => {
+        const channel = event.channel;
+        channel.binaryType = "arraybuffer";
+        channel.bufferedAmountLowThreshold = BUFFERED_LOW_WATER_MARK;
+        channelRef.current = channel;
+        channel.onopen = () => {
+          setStatus("ready");
+        };
+      };
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -152,21 +162,6 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-
-      const channel = pc.createDataChannel("file");
-      channel.binaryType = "arraybuffer";
-      channel.bufferedAmountLowThreshold = BUFFERED_LOW_WATER_MARK;
-      channelRef.current = channel;
-
-      await new Promise<void>((resolve) => {
-        if (channel.readyState === "open") {
-          resolve();
-          return;
-        }
-        channel.onopen = () => resolve();
-      });
-
-      setStatus("ready");
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
@@ -177,12 +172,19 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
   }, [roomInput]);
 
   useEffect(() => {
-    if (initialRoom && status === "idle") {
+    if (startedRef.current) {
+      return;
+    }
+    startedRef.current = true;
+    if (initialRoom) {
       void connect();
     }
 
-    return () => cleanup();
-  }, [cleanup, connect, initialRoom, status]);
+    return () => {
+      cleanup();
+      startedRef.current = false;
+    };
+  }, [cleanup, connect, initialRoom]);
 
   const waitForBufferedLow = useCallback(async (channel: RTCDataChannel) => {
     if (channel.bufferedAmount <= BUFFERED_HIGH_WATER_MARK) {
@@ -194,13 +196,28 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
         channel.removeEventListener("bufferedamountlow", onLow);
         resolve();
       };
+      const timeoutId = window.setTimeout(() => {
+        channel.removeEventListener("bufferedamountlow", onLow);
+        resolve();
+      }, 5000);
       channel.addEventListener("bufferedamountlow", onLow, { once: true });
+      channel.addEventListener(
+        "bufferedamountlow",
+        () => window.clearTimeout(timeoutId),
+        { once: true }
+      );
     });
   }, []);
 
   const sendFile = useCallback(async () => {
     if (!selectedFile || !channelRef.current) {
       setError("Choose a file before sending.");
+      setStatus("error");
+      return;
+    }
+
+    if (channelRef.current.readyState !== "open") {
+      setError("Connection not ready yet. Please try again.");
       setStatus("error");
       return;
     }
