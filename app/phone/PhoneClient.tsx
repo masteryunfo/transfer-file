@@ -258,9 +258,15 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
       setBytesSent(0);
 
       const channel = channelRef.current;
+      const ensureOpen = () => {
+        if (channel.readyState !== "open") {
+          throw new Error("Connection closed before transfer completed.");
+        }
+      };
       if (DEBUG) {
         console.debug("[phone] sending meta", selectedFile.name);
       }
+      ensureOpen();
       channel.send(
         JSON.stringify({
           type: "meta",
@@ -276,6 +282,7 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
         await waitForBufferedLow(channel);
         const slice = selectedFile.slice(offset, offset + CHUNK_SIZE);
         const buffer = await slice.arrayBuffer();
+        ensureOpen();
         channel.send(buffer);
         offset += buffer.byteLength;
         setBytesSent(offset);
@@ -288,6 +295,7 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
       if (DEBUG) {
         console.debug("[phone] sending done");
       }
+      ensureOpen();
       channel.send(JSON.stringify({ type: "done" }));
       setStatus("completed");
       channel.close();
