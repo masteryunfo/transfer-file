@@ -33,6 +33,7 @@ interface FileMeta {
 const POLL_INTERVAL_MS = 800;
 const POLL_TIMEOUT_MS = 60000;
 const ROOM_TTL_SECONDS = 300;
+const DEBUG = false;
 
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -151,6 +152,9 @@ export default function ComputerPage() {
             | { type: "error"; message: string };
 
           if (message.type === "meta") {
+            if (DEBUG) {
+              console.debug("[computer] meta received", message.name);
+            }
             setFileMeta({
               name: message.name,
               size: message.size,
@@ -184,6 +188,9 @@ export default function ComputerPage() {
           }
 
           if (message.type === "done") {
+            if (DEBUG) {
+              console.debug("[computer] done received");
+            }
             await handleReceiveDone();
           }
 
@@ -233,10 +240,28 @@ export default function ComputerPage() {
 
       const pc = createPeerConnection();
       pcRef.current = pc;
+      pc.onconnectionstatechange = () => {
+        if (DEBUG) {
+          console.debug("[computer] pc connection state", pc.connectionState);
+        }
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          setError("Connection lost. Please try again.");
+          setStatus("error");
+          abortRef.current?.abort();
+        }
+      };
       const channel = pc.createDataChannel("file");
       channel.binaryType = "arraybuffer";
       channel.onmessage = (message) => {
         void handleDataMessage(message);
+      };
+      channel.onerror = () => {
+        setError("Channel error. Please try again.");
+        setStatus("error");
+      };
+      channel.onclose = () => {
+        setError("Channel closed. Please try again.");
+        setStatus("error");
       };
       channelRef.current = channel;
 
@@ -245,6 +270,14 @@ export default function ComputerPage() {
         incoming.binaryType = "arraybuffer";
         incoming.onmessage = (message) => {
           void handleDataMessage(message);
+        };
+        incoming.onerror = () => {
+          setError("Channel error. Please try again.");
+          setStatus("error");
+        };
+        incoming.onclose = () => {
+          setError("Channel closed. Please try again.");
+          setStatus("error");
         };
         channelRef.current = incoming;
       };

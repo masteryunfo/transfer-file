@@ -23,6 +23,7 @@ const POLL_TIMEOUT_MS = 60000;
 const CHUNK_SIZE = 256 * 1024;
 const BUFFERED_HIGH_WATER_MARK = 16 * 1024 * 1024;
 const BUFFERED_LOW_WATER_MARK = 4 * 1024 * 1024;
+const DEBUG = false;
 
 type Status =
   | "idle"
@@ -98,13 +99,34 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
     try {
       const pc = createPeerConnection();
       pcRef.current = pc;
+      pc.onconnectionstatechange = () => {
+        if (DEBUG) {
+          console.debug("[phone] pc connection state", pc.connectionState);
+        }
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          setError("Connection lost. Please try again.");
+          setStatus("error");
+          abortRef.current?.abort();
+        }
+      };
       pc.ondatachannel = (event) => {
         const channel = event.channel;
         channel.binaryType = "arraybuffer";
         channel.bufferedAmountLowThreshold = BUFFERED_LOW_WATER_MARK;
         channelRef.current = channel;
         channel.onopen = () => {
+          if (DEBUG) {
+            console.debug("[phone] channel open", channel.readyState);
+          }
           setStatus("ready");
+        };
+        channel.onerror = () => {
+          setError("Channel error. Please reconnect.");
+          setStatus("error");
+        };
+        channel.onclose = () => {
+          setError("Channel closed. Please reconnect.");
+          setStatus("error");
         };
       };
 
@@ -192,14 +214,23 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
     }
 
     await new Promise<void>((resolve) => {
+      let resolved = false;
       const onLow = () => {
         channel.removeEventListener("bufferedamountlow", onLow);
+        resolved = true;
         resolve();
       };
       const timeoutId = window.setTimeout(() => {
         channel.removeEventListener("bufferedamountlow", onLow);
-        resolve();
-      }, 5000);
+        if (!resolved) {
+          const intervalId = window.setInterval(() => {
+            if (channel.bufferedAmount <= BUFFERED_LOW_WATER_MARK) {
+              window.clearInterval(intervalId);
+              resolve();
+            }
+          }, 200);
+        }
+      }, 2000);
       channel.addEventListener("bufferedamountlow", onLow, { once: true });
       channel.addEventListener(
         "bufferedamountlow",
@@ -210,44 +241,60 @@ export default function PhoneClient({ initialRoom }: { initialRoom: string }) {
   }, []);
 
   const sendFile = useCallback(async () => {
-    if (!selectedFile || !channelRef.current) {
-      setError("Choose a file before sending.");
+    try {
+      if (!selectedFile || !channelRef.current) {
+        setError("Choose a file before sending.");
+        setStatus("error");
+        return;
+      }
+
+      if (channelRef.current.readyState !== "open") {
+        setError("Connection not ready yet. Please try again.");
+        setStatus("error");
+        return;
+      }
+
+      setStatus("sending");
+      setBytesSent(0);
+
+      const channel = channelRef.current;
+      if (DEBUG) {
+        console.debug("[phone] sending meta", selectedFile.name);
+      }
+      channel.send(
+        JSON.stringify({
+          type: "meta",
+          name: selectedFile.name,
+          size: selectedFile.size,
+          mime: selectedFile.type || "application/octet-stream"
+        })
+      );
+
+      let offset = 0;
+      let chunkCount = 0;
+      while (offset < selectedFile.size) {
+        await waitForBufferedLow(channel);
+        const slice = selectedFile.slice(offset, offset + CHUNK_SIZE);
+        const buffer = await slice.arrayBuffer();
+        channel.send(buffer);
+        offset += buffer.byteLength;
+        setBytesSent(offset);
+        chunkCount += 1;
+        if (chunkCount % 8 === 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+
+      if (DEBUG) {
+        console.debug("[phone] sending done");
+      }
+      channel.send(JSON.stringify({ type: "done" }));
+      setStatus("completed");
+      channel.close();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Transfer failed.");
       setStatus("error");
-      return;
     }
-
-    if (channelRef.current.readyState !== "open") {
-      setError("Connection not ready yet. Please try again.");
-      setStatus("error");
-      return;
-    }
-
-    setStatus("sending");
-    setBytesSent(0);
-
-    const channel = channelRef.current;
-    channel.send(
-      JSON.stringify({
-        type: "meta",
-        name: selectedFile.name,
-        size: selectedFile.size,
-        mime: selectedFile.type || "application/octet-stream"
-      })
-    );
-
-    let offset = 0;
-    while (offset < selectedFile.size) {
-      await waitForBufferedLow(channel);
-      const slice = selectedFile.slice(offset, offset + CHUNK_SIZE);
-      const buffer = await slice.arrayBuffer();
-      channel.send(buffer);
-      offset += buffer.byteLength;
-      setBytesSent(offset);
-    }
-
-    channel.send(JSON.stringify({ type: "done" }));
-    setStatus("completed");
-    channel.close();
   }, [selectedFile, waitForBufferedLow]);
 
   return (
